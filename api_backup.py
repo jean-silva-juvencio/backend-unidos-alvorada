@@ -339,7 +339,7 @@ def salvar_chamada():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-# ========== LISTAR CHAMADAS (NOVO) ==========
+# ========== LISTAR CHAMADAS ==========
 @app.route('/listar_chamadas', methods=['GET'])
 def listar_chamadas():
     try:
@@ -370,6 +370,60 @@ def listar_chamadas():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+# ========== LIMPAR CHAMADAS ==========
+@app.route('/limpar_chamadas', methods=['POST'])
+def limpar_chamadas():
+    try:
+        dados = request.json
+        tipo = dados.get('tipo')
+        valor = dados.get('valor')
+        
+        if not tipo:
+            return jsonify({'success': False, 'error': 'Tipo de limpeza é obrigatório'})
+        
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        
+        if tipo == 'tudo':
+            cursor.execute("DELETE FROM chamadas")
+            mensagem = "Todas as chamadas foram excluídas!"
+            excluidas = cursor.rowcount
+            
+        elif tipo == 'mes':
+            if not valor:
+                return jsonify({'success': False, 'error': 'Mês é obrigatório (formato: YYYY-MM)'})
+            cursor.execute("DELETE FROM chamadas WHERE DATE_FORMAT(data, '%Y-%m') = %s", (valor,))
+            mensagem = f"Chamadas do mês {valor} excluídas!"
+            excluidas = cursor.rowcount
+            
+        elif tipo == 'ano':
+            if not valor:
+                return jsonify({'success': False, 'error': 'Ano é obrigatório (formato: YYYY)'})
+            cursor.execute("DELETE FROM chamadas WHERE YEAR(data) = %s", (valor,))
+            mensagem = f"Chamadas do ano {valor} excluídas!"
+            excluidas = cursor.rowcount
+            
+        elif tipo == 'semana':
+            cursor.execute("DELETE FROM chamadas WHERE data >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)")
+            mensagem = "Chamadas da última semana excluídas!"
+            excluidas = cursor.rowcount
+            
+        else:
+            conn.close()
+            return jsonify({'success': False, 'error': 'Tipo inválido'})
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True, 
+            'message': mensagem,
+            'excluidas': excluidas
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 # ========== INÍCIO DA API ==========
 if __name__ == '__main__':
     print("=" * 50)
@@ -384,5 +438,6 @@ if __name__ == '__main__':
     print("   - http://localhost:5000/presenca_periodo")
     print("   - http://localhost:5000/salvar_chamada")
     print("   - http://localhost:5000/listar_chamadas")
+    print("   - http://localhost:5000/limpar_chamadas")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)
