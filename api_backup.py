@@ -148,7 +148,7 @@ def atualizar_status():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-# ========== EDITAR RITMISTA (CORRIGIDO - USA ID) ==========
+# ========== EDITAR RITMISTA ==========
 @app.route('/editar_ritmista', methods=['POST'])
 def editar_ritmista():
     try:
@@ -232,20 +232,18 @@ def inscricao():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-# ========== RANKING DE PRESENÇA REAL ==========
+# ========== RANKING DE PRESENÇA ==========
 @app.route('/ranking_presenca', methods=['GET'])
 def ranking_presenca():
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
         
-        # Total de chamadas realizadas
         cursor.execute("SELECT COUNT(DISTINCT data) FROM chamadas")
         total_chamadas = cursor.fetchone()[0]
         if not total_chamadas:
             total_chamadas = 1
         
-        # Ranking dos ritmistas
         cursor.execute("""
             SELECT r.id, r.nome, r.instrumento, r.nivel,
                    COUNT(CASE WHEN c.status = 'PRESENTE' THEN 1 END) as presentes,
@@ -254,7 +252,7 @@ def ranking_presenca():
             LEFT JOIN chamadas c ON c.ritmista_id = r.id
             WHERE LOWER(r.status) = 'ativo'
             GROUP BY r.id
-            ORDER BY (presentes * 100.0 / NULLIF(presentes + ausentes, 0)) DESC, presentes DESC
+            ORDER BY (presentes * 100.0 / NULLIF(presentes + ausentes, 0)) DESC
         """)
         
         resultados = cursor.fetchall()
@@ -264,7 +262,6 @@ def ranking_presenca():
         for r in resultados:
             id_r, nome, instrumento, nivel, presentes, ausentes = r
             percentual = round((presentes / total_chamadas) * 100, 1) if total_chamadas > 0 else 0
-            
             ranking.append({
                 'id': id_r,
                 'nome': nome,
@@ -306,11 +303,7 @@ def presenca_periodo():
         presentes = resultado[0] if resultado[0] else 0
         ausentes = resultado[1] if resultado[1] else 0
         
-        return jsonify({
-            'success': True,
-            'presentes': presentes,
-            'ausentes': ausentes
-        })
+        return jsonify({'success': True, 'presentes': presentes, 'ausentes': ausentes})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -328,13 +321,11 @@ def salvar_chamada():
         conn = conectar_banco()
         cursor = conn.cursor()
         
-        # Verificar se já existe chamada para esta data
         cursor.execute("SELECT id FROM chamadas WHERE data = %s LIMIT 1", (data,))
         if cursor.fetchone():
             conn.close()
             return jsonify({'success': False, 'error': 'Chamada já registrada para esta data'})
         
-        # Inserir cada presença
         for ritmista_id, status in presencas.items():
             cursor.execute("""
                 INSERT INTO chamadas (data, ritmista_id, status)
@@ -345,7 +336,37 @@ def salvar_chamada():
         conn.close()
         
         return jsonify({'success': True, 'message': 'Chamada salva com sucesso!'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# ========== LISTAR CHAMADAS (NOVO) ==========
+@app.route('/listar_chamadas', methods=['GET'])
+def listar_chamadas():
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
         
+        cursor.execute("""
+            SELECT DISTINCT data, 
+                   COUNT(CASE WHEN status = 'PRESENTE' THEN 1 END) as presentes,
+                   COUNT(CASE WHEN status = 'AUSENTE' THEN 1 END) as ausentes
+            FROM chamadas
+            GROUP BY data
+            ORDER BY data DESC
+        """)
+        
+        resultados = cursor.fetchall()
+        conn.close()
+        
+        chamadas = []
+        for r in resultados:
+            chamadas.append({
+                'data': r[0].strftime("%Y-%m-%d"),
+                'presentes': r[1],
+                'ausentes': r[2]
+            })
+        
+        return jsonify({'success': True, 'chamadas': chamadas})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -362,5 +383,6 @@ if __name__ == '__main__':
     print("   - http://localhost:5000/ranking_presenca")
     print("   - http://localhost:5000/presenca_periodo")
     print("   - http://localhost:5000/salvar_chamada")
+    print("   - http://localhost:5000/listar_chamadas")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)
