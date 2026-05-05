@@ -370,6 +370,81 @@ def listar_chamadas():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+# ========== DETALHE DA CHAMADA (NOVO) ==========
+@app.route('/chamada', methods=['GET'])
+def get_chamada():
+    try:
+        data = request.args.get('data')
+        
+        if not data:
+            return jsonify({'success': False, 'error': 'Data é obrigatória'})
+        
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT r.nome, c.status
+            FROM chamadas c
+            JOIN ritmistas r ON c.ritmista_id = r.id
+            WHERE c.data = %s
+        """, (data,))
+        
+        resultados = cursor.fetchall()
+        conn.close()
+        
+        presentes = []
+        ausentes = []
+        for nome, status in resultados:
+            if status == 'PRESENTE':
+                presentes.append(nome)
+            else:
+                ausentes.append(nome)
+        
+        return jsonify({
+            'success': True,
+            'presentes': presentes,
+            'ausentes': ausentes
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# ========== CHAMADAS POR MÊS ==========
+@app.route('/chamadas_por_mes', methods=['GET'])
+def chamadas_por_mes():
+    try:
+        ano_mes = request.args.get('mes')
+        
+        if not ano_mes:
+            return jsonify({'success': False, 'error': 'Mês é obrigatório (formato: YYYY-MM)'})
+        
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT DISTINCT data, 
+                   COUNT(CASE WHEN status = 'PRESENTE' THEN 1 END) as presentes,
+                   COUNT(CASE WHEN status = 'AUSENTE' THEN 1 END) as ausentes
+            FROM chamadas
+            WHERE DATE_FORMAT(data, '%Y-%m') = %s
+            GROUP BY data
+            ORDER BY data DESC
+        """, (ano_mes,))
+        
+        resultados = cursor.fetchall()
+        conn.close()
+        
+        chamadas = []
+        for r in resultados:
+            chamadas.append({
+                'data': r[0].strftime("%Y-%m-%d"),
+                'presentes': r[1],
+                'ausentes': r[2]
+            })
+        
+        return jsonify({'success': True, 'chamadas': chamadas})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 # ========== LIMPAR CHAMADAS ==========
 @app.route('/limpar_chamadas', methods=['POST'])
 def limpar_chamadas():
@@ -438,6 +513,8 @@ if __name__ == '__main__':
     print("   - http://localhost:5000/presenca_periodo")
     print("   - http://localhost:5000/salvar_chamada")
     print("   - http://localhost:5000/listar_chamadas")
+    print("   - http://localhost:5000/chamada")
+    print("   - http://localhost:5000/chamadas_por_mes")
     print("   - http://localhost:5000/limpar_chamadas")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)
