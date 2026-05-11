@@ -49,7 +49,7 @@ def login():
         
         conn = conectar_banco()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, email, senha_hash, nome, nivel FROM usuarios WHERE email = %s", (email,))
+        cursor.execute("SELECT id, email, senha_hash, nombre, nivel FROM usuarios WHERE email = %s", (email,))
         usuario = cursor.fetchone()
         conn.close()
         
@@ -378,11 +378,10 @@ def criar_noticia():
         if not titulo or not conteudo:
             return jsonify({'success': False, 'error': 'Título e conteúdo são obrigatórios'})
 
-        # ✅ ADICIONADO: ACEITAR IMAGEM BASE64
+        # ✅ SÓ ADICIONA ISSO: suporte para imagem Base64
         imagem_base64 = dados.get('imagem_base64', '')
         imagem_url = dados.get('imagem_url', '')
         
-        # Se veio imagem Base64, usa ela (sobrescreve URL)
         if imagem_base64:
             imagem_url = imagem_base64
 
@@ -456,26 +455,8 @@ def excluir_noticia(id):
         return jsonify({'success': False, 'error': str(e)})
 
 # ==========================================
-# ========== BUSCA NA WEB (DuckDuckGo) =====
+# ========== BUSCA NA WEB ==================
 # ==========================================
-
-def buscar_duckduckgo(query):
-    try:
-        url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        resultados = []
-        for result in soup.select('.result')[:5]:
-            titulo = result.select_one('.result__a')
-            snippet = result.select_one('.result__snippet')
-            if titulo:
-                resultados.append(f"• {titulo.get_text(strip=True)}")
-        if resultados:
-            return "🔍 Resultados:\n" + "\n".join(resultados)
-        return "Nenhum resultado encontrado."
-    except Exception as e:
-        return "Erro ao buscar informações."
 
 @app.route('/buscar', methods=['POST'])
 def buscar_web():
@@ -484,13 +465,26 @@ def buscar_web():
         query = dados.get('query', '')
         if not query:
             return jsonify({'success': False, 'error': 'Digite uma busca'})
-        resultado = buscar_duckduckgo(query)
-        return jsonify({'success': True, 'resultado': resultado})
+        
+        url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        resultados = []
+        for result in soup.select('.result')[:5]:
+            titulo = result.select_one('.result__a')
+            if titulo:
+                resultados.append(f"• {titulo.get_text(strip=True)}")
+        
+        if resultados:
+            return jsonify({'success': True, 'resultado': "🔍 Resultados:\n" + "\n".join(resultados)})
+        return jsonify({'success': True, 'resultado': "Nenhum resultado encontrado."})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 # ==========================================
-# ========== SETUP: CRIAR TABELA ==========
+# ========== SETUP ========================
 # ==========================================
 
 @app.route('/setup_noticias', methods=['GET'])
@@ -513,11 +507,11 @@ def setup_noticias():
         """)
         conn.commit()
         conn.close()
-        return jsonify({'success': True, 'message': 'Tabela noticias criada/verificada com sucesso!'})
+        return jsonify({'success': True, 'message': 'Tabela noticias criada/verificada!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-# ========== INÍCIO DA API ==========
+# ========== INÍCIO ==========
 if __name__ == '__main__':
     print("=" * 50)
     print("🚀 API Unidos do Alvorada rodando!")
@@ -534,12 +528,11 @@ if __name__ == '__main__':
     print("   - GET  /noticias")
     print("   - GET  /noticias/<id>")
     print("   - POST /noticias/admin/listar")
-    print("   - POST /noticias/criar (aceita base64)")
+    print("   - POST /noticias/criar (aceita Base64)")
     print("   - POST /noticias/editar/<id>")
     print("   - DELETE /noticias/excluir/<id>")
     print("   --- BUSCA NA WEB ---")
     print("   - POST /buscar (DuckDuckGo)")
-    print("   --- SETUP ---")
     print("   - GET  /setup_noticias")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)
