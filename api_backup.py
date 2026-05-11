@@ -4,6 +4,8 @@ import mysql.connector
 from datetime import datetime, timedelta
 import bcrypt
 import secrets
+import requests
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 CORS(app)
@@ -284,14 +286,12 @@ def salvar_chamada():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-
 # ==========================================
 # ========== NOTÍCIAS ======================
 # ==========================================
 
 @app.route('/noticias', methods=['GET'])
 def listar_noticias():
-    """Retorna todas as notícias publicadas (público)"""
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
@@ -307,12 +307,8 @@ def listar_noticias():
         noticias = []
         for n in resultados:
             noticias.append({
-                'id': n[0],
-                'titulo': n[1],
-                'resumo': n[2],
-                'conteudo': n[3],
-                'imagem_url': n[4],
-                'autor': n[5],
+                'id': n[0], 'titulo': n[1], 'resumo': n[2], 'conteudo': n[3],
+                'imagem_url': n[4], 'autor': n[5],
                 'data_publicacao': n[6].strftime("%d/%m/%Y às %H:%M") if n[6] else '',
                 'destaque': bool(n[7])
             })
@@ -321,10 +317,8 @@ def listar_noticias():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-
 @app.route('/noticias/<int:id>', methods=['GET'])
 def buscar_noticia(id):
-    """Retorna uma notícia específica pelo ID (público)"""
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
@@ -347,10 +341,8 @@ def buscar_noticia(id):
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-
 @app.route('/noticias/admin/listar', methods=['POST'])
 def listar_noticias_admin():
-    """Lista todas as notícias (inclusive rascunhos) — só para admins"""
     try:
         dados = request.json
         token = dados.get('token')
@@ -379,10 +371,8 @@ def listar_noticias_admin():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-
 @app.route('/noticias/criar', methods=['POST'])
 def criar_noticia():
-    """Cria uma nova notícia — só para admins"""
     try:
         dados = request.json
         token = dados.get('token')
@@ -401,12 +391,8 @@ def criar_noticia():
             INSERT INTO noticias (titulo, resumo, conteudo, imagem_url, autor, status, destaque, data_publicacao)
             VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
         """, (
-            titulo,
-            dados.get('resumo', ''),
-            conteudo,
-            dados.get('imagem_url', ''),
-            usuario.get('nome', 'Admin'),
-            dados.get('status', 'PUBLICADA'),
+            titulo, dados.get('resumo', ''), conteudo, dados.get('imagem_url', ''),
+            usuario.get('nome', 'Admin'), dados.get('status', 'PUBLICADA'),
             1 if dados.get('destaque') else 0
         ))
         conn.commit()
@@ -417,10 +403,8 @@ def criar_noticia():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-
 @app.route('/noticias/editar/<int:id>', methods=['POST'])
 def editar_noticia(id):
-    """Edita uma notícia existente — só para admins"""
     try:
         dados = request.json
         token = dados.get('token')
@@ -441,13 +425,8 @@ def editar_noticia(id):
                 status = %s, destaque = %s
             WHERE id = %s
         """, (
-            titulo,
-            dados.get('resumo', ''),
-            conteudo,
-            dados.get('imagem_url', ''),
-            dados.get('status', 'PUBLICADA'),
-            1 if dados.get('destaque') else 0,
-            id
+            titulo, dados.get('resumo', ''), conteudo, dados.get('imagem_url', ''),
+            dados.get('status', 'PUBLICADA'), 1 if dados.get('destaque') else 0, id
         ))
         conn.commit()
         conn.close()
@@ -456,10 +435,8 @@ def editar_noticia(id):
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-
 @app.route('/noticias/excluir/<int:id>', methods=['DELETE'])
 def excluir_noticia(id):
-    """Exclui uma notícia — só para admins"""
     try:
         dados = request.json
         token = dados.get('token')
@@ -477,6 +454,63 @@ def excluir_noticia(id):
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+# ==========================================
+# ========== BUSCA NA WEB (DuckDuckGo) =====
+# ==========================================
+
+def buscar_duckduckgo(query):
+    """Busca informações no DuckDuckGo (grátis, sem chave)"""
+    try:
+        url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        resultados = []
+        for result in soup.select('.result')[:5]:
+            titulo = result.select_one('.result__a')
+            snippet = result.select_one('.result__snippet')
+            link = result.select_one('.result__url')
+            
+            if titulo and snippet:
+                resultados.append({
+                    'titulo': titulo.get_text(strip=True),
+                    'resumo': snippet.get_text(strip=True),
+                    'link': link.get_text(strip=True) if link else ''
+                })
+        
+        if resultados:
+            texto = "\n\n".join([
+                f"🔍 {r['titulo']}\n📄 {r['resumo'][:300]}\n🔗 {r['link']}"
+                for r in resultados
+            ])
+            return texto
+        return "Nenhum resultado encontrado para esta busca."
+    except Exception as e:
+        print(f"Erro na busca: {e}")
+        return "Erro ao buscar informações. Tente novamente mais tarde."
+
+@app.route('/buscar', methods=['POST'])
+def buscar_web():
+    """Endpoint para busca na web usando DuckDuckGo"""
+    try:
+        dados = request.json
+        query = dados.get('query', '')
+        
+        if not query or not query.strip():
+            return jsonify({'success': False, 'error': 'Digite o que você quer buscar'})
+        
+        resultado = buscar_duckduckgo(query)
+        return jsonify({
+            'success': True, 
+            'query': query,
+            'resultado': resultado,
+            'fonte': 'DuckDuckGo'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 # ==========================================
 # ========== SETUP: CRIAR TABELA ==========
@@ -506,7 +540,6 @@ def setup_noticias():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-
 # ========== INÍCIO DA API ==========
 if __name__ == '__main__':
     print("=" * 50)
@@ -527,6 +560,8 @@ if __name__ == '__main__':
     print("   - POST /noticias/criar")
     print("   - POST /noticias/editar/<id>")
     print("   - DELETE /noticias/excluir/<id>")
+    print("   --- BUSCA NA WEB ---")
+    print("   - POST /buscar (DuckDuckGo)")
     print("   --- SETUP ---")
     print("   - GET  /setup_noticias")
     print("=" * 50)
