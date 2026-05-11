@@ -303,7 +303,6 @@ def listar_noticias():
         """)
         resultados = cursor.fetchall()
         conn.close()
-
         noticias = []
         for n in resultados:
             noticias.append({
@@ -312,7 +311,6 @@ def listar_noticias():
                 'data_publicacao': n[6].strftime("%d/%m/%Y às %H:%M") if n[6] else '',
                 'destaque': bool(n[7])
             })
-
         return jsonify({'success': True, 'noticias': noticias})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -328,10 +326,8 @@ def buscar_noticia(id):
         """, (id,))
         n = cursor.fetchone()
         conn.close()
-
         if not n:
             return jsonify({'success': False, 'error': 'Notícia não encontrada'})
-
         return jsonify({'success': True, 'noticia': {
             'id': n[0], 'titulo': n[1], 'resumo': n[2], 'conteudo': n[3],
             'imagem_url': n[4], 'autor': n[5],
@@ -349,7 +345,6 @@ def listar_noticias_admin():
         usuario = verificar_sessao(token)
         if not usuario:
             return jsonify({'success': False, 'error': 'Acesso negado'})
-
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
@@ -358,7 +353,6 @@ def listar_noticias_admin():
         """)
         resultados = cursor.fetchall()
         conn.close()
-
         noticias = []
         for n in resultados:
             noticias.append({
@@ -366,7 +360,6 @@ def listar_noticias_admin():
                 'data_publicacao': n[4].strftime("%d/%m/%Y às %H:%M") if n[4] else '',
                 'status': n[5], 'destaque': bool(n[6])
             })
-
         return jsonify({'success': True, 'noticias': noticias})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -385,13 +378,21 @@ def criar_noticia():
         if not titulo or not conteudo:
             return jsonify({'success': False, 'error': 'Título e conteúdo são obrigatórios'})
 
+        # ✅ ADICIONADO: ACEITAR IMAGEM BASE64
+        imagem_base64 = dados.get('imagem_base64', '')
+        imagem_url = dados.get('imagem_url', '')
+        
+        # Se veio imagem Base64, usa ela (sobrescreve URL)
+        if imagem_base64:
+            imagem_url = imagem_base64
+
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO noticias (titulo, resumo, conteudo, imagem_url, autor, status, destaque, data_publicacao)
             VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
         """, (
-            titulo, dados.get('resumo', ''), conteudo, dados.get('imagem_url', ''),
+            titulo, dados.get('resumo', ''), conteudo, imagem_url,
             usuario.get('nome', 'Admin'), dados.get('status', 'PUBLICADA'),
             1 if dados.get('destaque') else 0
         ))
@@ -459,56 +460,32 @@ def excluir_noticia(id):
 # ==========================================
 
 def buscar_duckduckgo(query):
-    """Busca informações no DuckDuckGo (grátis, sem chave)"""
     try:
         url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
-        
         resultados = []
         for result in soup.select('.result')[:5]:
             titulo = result.select_one('.result__a')
             snippet = result.select_one('.result__snippet')
-            link = result.select_one('.result__url')
-            
-            if titulo and snippet:
-                resultados.append({
-                    'titulo': titulo.get_text(strip=True),
-                    'resumo': snippet.get_text(strip=True),
-                    'link': link.get_text(strip=True) if link else ''
-                })
-        
+            if titulo:
+                resultados.append(f"• {titulo.get_text(strip=True)}")
         if resultados:
-            texto = "\n\n".join([
-                f"🔍 {r['titulo']}\n📄 {r['resumo'][:300]}\n🔗 {r['link']}"
-                for r in resultados
-            ])
-            return texto
-        return "Nenhum resultado encontrado para esta busca."
+            return "🔍 Resultados:\n" + "\n".join(resultados)
+        return "Nenhum resultado encontrado."
     except Exception as e:
-        print(f"Erro na busca: {e}")
-        return "Erro ao buscar informações. Tente novamente mais tarde."
+        return "Erro ao buscar informações."
 
 @app.route('/buscar', methods=['POST'])
 def buscar_web():
-    """Endpoint para busca na web usando DuckDuckGo"""
     try:
         dados = request.json
         query = dados.get('query', '')
-        
-        if not query or not query.strip():
-            return jsonify({'success': False, 'error': 'Digite o que você quer buscar'})
-        
+        if not query:
+            return jsonify({'success': False, 'error': 'Digite uma busca'})
         resultado = buscar_duckduckgo(query)
-        return jsonify({
-            'success': True, 
-            'query': query,
-            'resultado': resultado,
-            'fonte': 'DuckDuckGo'
-        })
+        return jsonify({'success': True, 'resultado': resultado})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -557,7 +534,7 @@ if __name__ == '__main__':
     print("   - GET  /noticias")
     print("   - GET  /noticias/<id>")
     print("   - POST /noticias/admin/listar")
-    print("   - POST /noticias/criar")
+    print("   - POST /noticias/criar (aceita base64)")
     print("   - POST /noticias/editar/<id>")
     print("   - DELETE /noticias/excluir/<id>")
     print("   --- BUSCA NA WEB ---")
