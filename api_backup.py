@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 import base64
 import uuid
 import os
+import json
 
 app = Flask(__name__)
 CORS(app)
@@ -359,7 +360,7 @@ def listar_noticias():
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, titulo, resumo, conteudo, imagem_url, autor, data_publicacao, destaque
+            SELECT id, titulo, resumo, conteudo, imagem_base64, autor, data_publicacao, destaque
             FROM noticias
             WHERE status = 'PUBLICADA'
             ORDER BY destaque DESC, data_publicacao DESC
@@ -371,7 +372,7 @@ def listar_noticias():
         for n in resultados:
             noticias.append({
                 'id': n[0], 'titulo': n[1], 'resumo': n[2], 'conteudo': n[3],
-                'imagem_url': n[4], 'autor': n[5],
+                'imagem_base64': n[4], 'autor': n[5],
                 'data_publicacao': n[6].strftime("%d/%m/%Y às %H:%M") if n[6] else '',
                 'destaque': bool(n[7])
             })
@@ -385,7 +386,7 @@ def buscar_noticia(id):
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, titulo, resumo, conteudo, imagem_url, autor, data_publicacao, destaque
+            SELECT id, titulo, resumo, conteudo, imagem_base64, autor, data_publicacao, destaque
             FROM noticias WHERE id = %s AND status = 'PUBLICADA'
         """, (id,))
         n = cursor.fetchone()
@@ -394,7 +395,7 @@ def buscar_noticia(id):
             return jsonify({'success': False, 'error': 'Notícia não encontrada'})
         return jsonify({'success': True, 'noticia': {
             'id': n[0], 'titulo': n[1], 'resumo': n[2], 'conteudo': n[3],
-            'imagem_url': n[4], 'autor': n[5],
+            'imagem_base64': n[4], 'autor': n[5],
             'data_publicacao': n[6].strftime("%d/%m/%Y às %H:%M") if n[6] else '',
             'destaque': bool(n[7])
         }})
@@ -441,37 +442,22 @@ def criar_noticia():
         if not titulo or not conteudo:
             return jsonify({'success': False, 'error': 'Título e conteúdo são obrigatórios'})
 
-        imagem_url = ''
         imagem_base64 = dados.get('imagem_base64', '')
-        
-        if imagem_base64:
-            try:
-                if ',' in imagem_base64:
-                    img_data = imagem_base64.split(',')[1]
-                else:
-                    img_data = imagem_base64
-                
-                img_bytes = base64.b64decode(img_data)
-                
-                nome_arquivo = f"{uuid.uuid4()}.png"
-                if not os.path.exists('icones'):
-                    os.makedirs('icones')
-                caminho = os.path.join('icones', nome_arquivo)
-                
-                with open(caminho, 'wb') as f:
-                    f.write(img_bytes)
-                
-                imagem_url = f'/icones/{nome_arquivo}'
-            except Exception as e:
-                print(f"Erro ao salvar imagem: {e}")
 
         conn = conectar_banco()
         cursor = conn.cursor()
+        
+        # Verificar se a tabela noticias tem a coluna imagem_base64
+        cursor.execute("SHOW COLUMNS FROM noticias LIKE 'imagem_base64'")
+        if not cursor.fetchone():
+            cursor.execute("ALTER TABLE noticias ADD COLUMN imagem_base64 LONGTEXT")
+            conn.commit()
+        
         cursor.execute("""
-            INSERT INTO noticias (titulo, resumo, conteudo, imagem_url, autor, status, destaque, data_publicacao)
+            INSERT INTO noticias (titulo, resumo, conteudo, imagem_base64, autor, status, destaque, data_publicacao)
             VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
         """, (
-            titulo, dados.get('resumo', ''), conteudo, imagem_url,
+            titulo, dados.get('resumo', ''), conteudo, imagem_base64,
             dados.get('autor', 'Admin'), dados.get('status', 'PUBLICADA'),
             1 if dados.get('destaque') else 0
         ))
@@ -493,15 +479,17 @@ def editar_noticia(id):
         if not titulo or not conteudo:
             return jsonify({'success': False, 'error': 'Título e conteúdo são obrigatórios'})
 
+        imagem_base64 = dados.get('imagem_base64', '')
+
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE noticias
-            SET titulo = %s, resumo = %s, conteudo = %s, imagem_url = %s,
+            SET titulo = %s, resumo = %s, conteudo = %s, imagem_base64 = %s,
                 status = %s, destaque = %s
             WHERE id = %s
         """, (
-            titulo, dados.get('resumo', ''), conteudo, dados.get('imagem_url', ''),
+            titulo, dados.get('resumo', ''), conteudo, imagem_base64,
             dados.get('status', 'PUBLICADA'), 1 if dados.get('destaque') else 0, id
         ))
         conn.commit()
@@ -520,6 +508,96 @@ def excluir_noticia(id):
         conn.commit()
         conn.close()
         return jsonify({'success': True, 'message': 'Notícia excluída!'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# ==========================================
+# ========== BANNERS (CARROSSEL) ==========
+# ==========================================
+
+@app.route('/banners', methods=['GET'])
+def listar_banners():
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, imagem_base64, ordem FROM banners ORDER BY ordem ASC")
+        resultados = cursor.fetchall()
+        conn.close()
+        
+        banners = []
+        for r in resultados:
+            banners.append({
+                'id': r[0],
+                'imagem_base64': r[1],
+                'ordem': r[2]
+            })
+        
+        return jsonify({'success': True, 'banners': banners})
+    except Exception as e:
+        # Se tabela não existir, cria e retorna vazio
+        return jsonify({'success': True, 'banners': []})
+
+@app.route('/banners/criar', methods=['POST'])
+def criar_banner():
+    try:
+        dados = request.json
+        imagem_base64 = dados.get('imagem_base64', '')
+        ordem = dados.get('ordem', 0)
+        
+        if not imagem_base64:
+            return jsonify({'success': False, 'error': 'Imagem é obrigatória'})
+        
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        
+        # Criar tabela se não existir
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS banners (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                imagem_base64 LONGTEXT NOT NULL,
+                ordem INT DEFAULT 0,
+                created_at DATETIME DEFAULT NOW()
+            )
+        """)
+        conn.commit()
+        
+        cursor.execute("""
+            INSERT INTO banners (imagem_base64, ordem)
+            VALUES (%s, %s)
+        """, (imagem_base64, ordem))
+        conn.commit()
+        novo_id = cursor.lastrowid
+        conn.close()
+        
+        return jsonify({'success': True, 'message': 'Banner criado!', 'id': novo_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/banners/excluir/<int:id>', methods=['DELETE'])
+def excluir_banner(id):
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM banners WHERE id = %s", (id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'message': 'Banner removido!'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/banners/reordenar', methods=['POST'])
+def reordenar_banners():
+    try:
+        dados = request.json
+        ids = dados.get('ids', [])
+        
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        for ordem, id_banner in enumerate(ids):
+            cursor.execute("UPDATE banners SET ordem = %s WHERE id = %s", (ordem, id_banner))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'message': 'Ordem atualizada!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -567,7 +645,7 @@ def setup_noticias():
                 titulo VARCHAR(255) NOT NULL,
                 resumo TEXT,
                 conteudo LONGTEXT NOT NULL,
-                imagem_url VARCHAR(500),
+                imagem_base64 LONGTEXT,
                 autor VARCHAR(100),
                 status ENUM('PUBLICADA', 'RASCUNHO') DEFAULT 'PUBLICADA',
                 destaque TINYINT(1) DEFAULT 0,
@@ -595,13 +673,18 @@ if __name__ == '__main__':
     print("   - GET  /listar_chamadas")
     print("   - GET  /chamada?data=YYYY-MM-DD")
     print("   - POST /salvar_chamada")
-    print("   --- NOTÍCIAS ---")
+    print("   --- NOTÍCIAS (com imagem Base64) ---")
     print("   - GET  /noticias")
     print("   - GET  /noticias/<id>")
     print("   - POST /noticias/admin/listar")
-    print("   - POST /noticias/criar (upload de imagem)")
+    print("   - POST /noticias/criar")
     print("   - POST /noticias/editar/<id>")
     print("   - DELETE /noticias/excluir/<id>")
+    print("   --- BANNERS (carrossel) ---")
+    print("   - GET  /banners")
+    print("   - POST /banners/criar")
+    print("   - DELETE /banners/excluir/<id>")
+    print("   - POST /banners/reordenar")
     print("   --- BUSCA NA WEB ---")
     print("   - POST /buscar (DuckDuckGo)")
     print("   - GET  /setup_noticias")
