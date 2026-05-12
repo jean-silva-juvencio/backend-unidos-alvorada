@@ -435,11 +435,6 @@ def listar_noticias_admin():
 def criar_noticia():
     try:
         dados = request.json
-        # Autenticação removida para teste
-        # token = dados.get('token')
-        # usuario = verificar_sessao(token)
-        # if not usuario:
-        #     return jsonify({'success': False, 'error': 'Acesso negado'})
 
         titulo = dados.get('titulo', '').strip()
         conteudo = dados.get('conteudo', '').strip()
@@ -451,7 +446,6 @@ def criar_noticia():
         
         if imagem_base64:
             try:
-                # Remove o cabeçalho "data:image/png;base64,"
                 if ',' in imagem_base64:
                     img_data = imagem_base64.split(',')[1]
                 else:
@@ -459,21 +453,17 @@ def criar_noticia():
                 
                 img_bytes = base64.b64decode(img_data)
                 
-                # Gera nome único
                 nome_arquivo = f"{uuid.uuid4()}.png"
-                # Cria a pasta icones se não existir
                 if not os.path.exists('icones'):
                     os.makedirs('icones')
                 caminho = os.path.join('icones', nome_arquivo)
                 
-                # Salva o arquivo
                 with open(caminho, 'wb') as f:
                     f.write(img_bytes)
                 
                 imagem_url = f'/icones/{nome_arquivo}'
             except Exception as e:
                 print(f"Erro ao salvar imagem: {e}")
-                # Se falhar, mantém imagem_url vazio
 
         conn = conectar_banco()
         cursor = conn.cursor()
@@ -497,10 +487,6 @@ def criar_noticia():
 def editar_noticia(id):
     try:
         dados = request.json
-        token = dados.get('token')
-        usuario = verificar_sessao(token)
-        if not usuario:
-            return jsonify({'success': False, 'error': 'Acesso negado'})
 
         titulo = dados.get('titulo', '').strip()
         conteudo = dados.get('conteudo', '').strip()
@@ -528,13 +514,6 @@ def editar_noticia(id):
 @app.route('/noticias/excluir/<int:id>', methods=['DELETE'])
 def excluir_noticia(id):
     try:
-        # Autenticação removida para teste
-        # dados = request.json
-        # token = dados.get('token')
-        # usuario = verificar_sessao(token)
-        # if not usuario:
-        #     return jsonify({'success': False, 'error': 'Acesso negado'})
-
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM noticias WHERE id = %s", (id,))
@@ -620,7 +599,7 @@ if __name__ == '__main__':
     print("   - GET  /noticias")
     print("   - GET  /noticias/<id>")
     print("   - POST /noticias/admin/listar")
-    print("   - POST /noticias/criar (suporta upload de imagem)")
+    print("   - POST /noticias/criar (upload de imagem)")
     print("   - POST /noticias/editar/<id>")
     print("   - DELETE /noticias/excluir/<id>")
     print("   --- BUSCA NA WEB ---")
