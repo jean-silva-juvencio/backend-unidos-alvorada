@@ -49,7 +49,7 @@ def login():
         
         conn = conectar_banco()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, email, senha_hash, nombre, nivel FROM usuarios WHERE email = %s", (email,))
+        cursor.execute("SELECT id, email, senha_hash, nome, nivel FROM usuarios WHERE email = %s", (email,))
         usuario = cursor.fetchone()
         conn.close()
         
@@ -250,6 +250,7 @@ def presenca_periodo():
         fim = request.args.get('fim')
         if not inicio or not fim:
             return jsonify({'success': False, 'error': 'Datas de início e fim são obrigatórias'})
+        
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
@@ -259,7 +260,69 @@ def presenca_periodo():
         """, (inicio, fim))
         resultado = cursor.fetchone()
         conn.close()
+        
         return jsonify({'success': True, 'presentes': resultado[0] or 0, 'ausentes': resultado[1] or 0})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# ========== LISTAR CHAMADAS (HISTÓRICO) ==========
+@app.route('/listar_chamadas', methods=['GET'])
+def listar_chamadas():
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT data, 
+                   COUNT(CASE WHEN status = 'PRESENTE' THEN 1 END) as presentes,
+                   COUNT(CASE WHEN status = 'AUSENTE' THEN 1 END) as ausentes
+            FROM chamadas
+            GROUP BY data
+            ORDER BY data DESC
+        """)
+        resultados = cursor.fetchall()
+        conn.close()
+        
+        chamadas = []
+        for r in resultados:
+            chamadas.append({
+                'data': r[0].strftime("%Y-%m-%d"),
+                'presentes': r[1],
+                'ausentes': r[2]
+            })
+        
+        return jsonify({'success': True, 'chamadas': chamadas})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# ========== BUSCAR DETALHE DA CHAMADA ==========
+@app.route('/chamada', methods=['GET'])
+def buscar_chamada():
+    try:
+        data = request.args.get('data')
+        if not data:
+            return jsonify({'success': False, 'error': 'Data não informada'})
+        
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT r.nome, c.status
+            FROM chamadas c
+            JOIN ritmistas r ON c.ritmista_id = r.id
+            WHERE c.data = %s
+            ORDER BY r.nome
+        """, (data,))
+        resultados = cursor.fetchall()
+        conn.close()
+        
+        presentes = []
+        ausentes = []
+        for nome, status in resultados:
+            if status == 'PRESENTE':
+                presentes.append(nome)
+            else:
+                ausentes.append(nome)
+        
+        return jsonify({'success': True, 'presentes': presentes, 'ausentes': ausentes})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -272,12 +335,14 @@ def salvar_chamada():
         presencas = dados.get('presencas')
         if not data or not presencas:
             return jsonify({'success': False, 'error': 'Data e presenças são obrigatórios'})
+        
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM chamadas WHERE data = %s LIMIT 1", (data,))
         if cursor.fetchone():
             conn.close()
             return jsonify({'success': False, 'error': 'Chamada já registrada para esta data'})
+        
         for ritmista_id, status in presencas.items():
             cursor.execute("INSERT INTO chamadas (data, ritmista_id, status) VALUES (%s, %s, %s)", (data, ritmista_id, status))
         conn.commit()
@@ -303,6 +368,7 @@ def listar_noticias():
         """)
         resultados = cursor.fetchall()
         conn.close()
+        
         noticias = []
         for n in resultados:
             noticias.append({
@@ -345,6 +411,7 @@ def listar_noticias_admin():
         usuario = verificar_sessao(token)
         if not usuario:
             return jsonify({'success': False, 'error': 'Acesso negado'})
+        
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
@@ -353,6 +420,7 @@ def listar_noticias_admin():
         """)
         resultados = cursor.fetchall()
         conn.close()
+        
         noticias = []
         for n in resultados:
             noticias.append({
@@ -378,10 +446,8 @@ def criar_noticia():
         if not titulo or not conteudo:
             return jsonify({'success': False, 'error': 'Título e conteúdo são obrigatórios'})
 
-        # ✅ SÓ ADICIONA ISSO: suporte para imagem Base64
         imagem_base64 = dados.get('imagem_base64', '')
         imagem_url = dados.get('imagem_url', '')
-        
         if imagem_base64:
             imagem_url = imagem_base64
 
@@ -398,7 +464,6 @@ def criar_noticia():
         conn.commit()
         novo_id = cursor.lastrowid
         conn.close()
-
         return jsonify({'success': True, 'message': 'Notícia criada com sucesso!', 'id': novo_id})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -430,7 +495,6 @@ def editar_noticia(id):
         ))
         conn.commit()
         conn.close()
-
         return jsonify({'success': True, 'message': 'Notícia atualizada!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -449,7 +513,6 @@ def excluir_noticia(id):
         cursor.execute("DELETE FROM noticias WHERE id = %s", (id,))
         conn.commit()
         conn.close()
-
         return jsonify({'success': True, 'message': 'Notícia excluída!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -522,13 +585,15 @@ if __name__ == '__main__':
     print("   - POST /editar_ritmista")
     print("   - POST /inscricao")
     print("   - GET  /ranking_presenca")
-    print("   - GET  /presenca_periodo")
+    print("   - GET  /presenca_periodo?inicio=YYYY-MM-DD&fim=YYYY-MM-DD")
+    print("   - GET  /listar_chamadas")
+    print("   - GET  /chamada?data=YYYY-MM-DD")
     print("   - POST /salvar_chamada")
     print("   --- NOTÍCIAS ---")
     print("   - GET  /noticias")
     print("   - GET  /noticias/<id>")
     print("   - POST /noticias/admin/listar")
-    print("   - POST /noticias/criar (aceita Base64)")
+    print("   - POST /noticias/criar")
     print("   - POST /noticias/editar/<id>")
     print("   - DELETE /noticias/excluir/<id>")
     print("   --- BUSCA NA WEB ---")
