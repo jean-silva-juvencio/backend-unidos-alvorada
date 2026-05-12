@@ -4,3 +4,4 @@ mysql-connector-python
 bcrypt
 requests
 beautifulsoup4
+gunicorn
