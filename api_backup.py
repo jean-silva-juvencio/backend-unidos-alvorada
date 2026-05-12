@@ -4,6 +4,8 @@ import mysql.connector
 from datetime import datetime, timedelta
 import bcrypt
 import secrets
+import requests
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 CORS(app)
@@ -261,29 +263,6 @@ def presenca_periodo():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-# ========== SALVAR CHAMADA ==========
-@app.route('/salvar_chamada', methods=['POST'])
-def salvar_chamada():
-    try:
-        dados = request.json
-        data = dados.get('data')
-        presencas = dados.get('presencas')
-        if not data or not presencas:
-            return jsonify({'success': False, 'error': 'Data e presenças são obrigatórios'})
-        conn = conectar_banco()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM chamadas WHERE data = %s LIMIT 1", (data,))
-        if cursor.fetchone():
-            conn.close()
-            return jsonify({'success': False, 'error': 'Chamada já registrada para esta data'})
-        for ritmista_id, status in presencas.items():
-            cursor.execute("INSERT INTO chamadas (data, ritmista_id, status) VALUES (%s, %s, %s)", (data, ritmista_id, status))
-        conn.commit()
-        conn.close()
-        return jsonify({'success': True, 'message': 'Chamada salva com sucesso!'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
 # ========== LISTAR CHAMADAS ==========
 @app.route('/listar_chamadas', methods=['GET'])
 def listar_chamadas():
@@ -344,7 +323,33 @@ def get_chamada():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-# ========== NOTÍCIAS ==========
+# ========== SALVAR CHAMADA ==========
+@app.route('/salvar_chamada', methods=['POST'])
+def salvar_chamada():
+    try:
+        dados = request.json
+        data = dados.get('data')
+        presencas = dados.get('presencas')
+        if not data or not presencas:
+            return jsonify({'success': False, 'error': 'Data e presenças são obrigatórios'})
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM chamadas WHERE data = %s LIMIT 1", (data,))
+        if cursor.fetchone():
+            conn.close()
+            return jsonify({'success': False, 'error': 'Chamada já registrada para esta data'})
+        for ritmista_id, status in presencas.items():
+            cursor.execute("INSERT INTO chamadas (data, ritmista_id, status) VALUES (%s, %s, %s)", (data, ritmista_id, status))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'message': 'Chamada salva com sucesso!'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# ==========================================
+# ========== NOTÍCIAS ======================
+# ==========================================
+
 @app.route('/noticias', methods=['GET'])
 def listar_noticias():
     try:
@@ -368,6 +373,28 @@ def listar_noticias():
                 'destaque': bool(n[7])
             })
         return jsonify({'success': True, 'noticias': noticias})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/noticias/<int:id>', methods=['GET'])
+def buscar_noticia(id):
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, titulo, resumo, conteudo, imagem_url, autor, data_publicacao, destaque
+            FROM noticias WHERE id = %s AND status = 'PUBLICADA'
+        """, (id,))
+        n = cursor.fetchone()
+        conn.close()
+        if not n:
+            return jsonify({'success': False, 'error': 'Notícia não encontrada'})
+        return jsonify({'success': True, 'noticia': {
+            'id': n[0], 'titulo': n[1], 'resumo': n[2], 'conteudo': n[3],
+            'imagem_url': n[4], 'autor': n[5],
+            'data_publicacao': n[6].strftime("%d/%m/%Y às %H:%M") if n[6] else '',
+            'destaque': bool(n[7])
+        }})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -405,18 +432,22 @@ def listar_noticias_admin():
 def criar_noticia():
     try:
         dados = request.json
-        token = dados.get('token')
-        usuario = verificar_sessao(token)
-        if not usuario:
-            return jsonify({'success': False, 'error': 'Acesso negado'})
-        
+        # AUTENTICAÇÃO REMOVIDA PARA TESTE
+        # token = dados.get('token')
+        # usuario = verificar_sessao(token)
+        # if not usuario:
+        #     return jsonify({'success': False, 'error': 'Acesso negado'})
+
         titulo = dados.get('titulo', '').strip()
         conteudo = dados.get('conteudo', '').strip()
         if not titulo or not conteudo:
             return jsonify({'success': False, 'error': 'Título e conteúdo são obrigatórios'})
-        
+
+        imagem_base64 = dados.get('imagem_base64', '')
         imagem_url = dados.get('imagem_url', '')
-        
+        if imagem_base64:
+            imagem_url = imagem_base64
+
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
@@ -424,14 +455,14 @@ def criar_noticia():
             VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
         """, (
             titulo, dados.get('resumo', ''), conteudo, imagem_url,
-            usuario.get('nome', 'Admin'), dados.get('status', 'PUBLICADA'),
+            dados.get('autor', 'Admin'), dados.get('status', 'PUBLICADA'),
             1 if dados.get('destaque') else 0
         ))
         conn.commit()
         novo_id = cursor.lastrowid
         conn.close()
-        
-        return jsonify({'success': True, 'message': 'Notícia criada!', 'id': novo_id})
+
+        return jsonify({'success': True, 'message': 'Notícia criada com sucesso!', 'id': novo_id})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -443,7 +474,12 @@ def editar_noticia(id):
         usuario = verificar_sessao(token)
         if not usuario:
             return jsonify({'success': False, 'error': 'Acesso negado'})
-        
+
+        titulo = dados.get('titulo', '').strip()
+        conteudo = dados.get('conteudo', '').strip()
+        if not titulo or not conteudo:
+            return jsonify({'success': False, 'error': 'Título e conteúdo são obrigatórios'})
+
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
@@ -452,12 +488,12 @@ def editar_noticia(id):
                 status = %s, destaque = %s
             WHERE id = %s
         """, (
-            dados.get('titulo'), dados.get('resumo', ''), dados.get('conteudo'),
-            dados.get('imagem_url', ''), dados.get('status', 'PUBLICADA'),
-            1 if dados.get('destaque') else 0, id
+            titulo, dados.get('resumo', ''), conteudo, dados.get('imagem_url', ''),
+            dados.get('status', 'PUBLICADA'), 1 if dados.get('destaque') else 0, id
         ))
         conn.commit()
         conn.close()
+
         return jsonify({'success': True, 'message': 'Notícia atualizada!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -470,17 +506,50 @@ def excluir_noticia(id):
         usuario = verificar_sessao(token)
         if not usuario:
             return jsonify({'success': False, 'error': 'Acesso negado'})
-        
+
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM noticias WHERE id = %s", (id,))
         conn.commit()
         conn.close()
+
         return jsonify({'success': True, 'message': 'Notícia excluída!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-# ========== SETUP ==========
+# ==========================================
+# ========== BUSCA NA WEB ==================
+# ==========================================
+
+@app.route('/buscar', methods=['POST'])
+def buscar_web():
+    try:
+        dados = request.json
+        query = dados.get('query', '')
+        if not query:
+            return jsonify({'success': False, 'error': 'Digite uma busca'})
+        
+        url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        resultados = []
+        for result in soup.select('.result')[:5]:
+            titulo = result.select_one('.result__a')
+            if titulo:
+                resultados.append(f"• {titulo.get_text(strip=True)}")
+        
+        if resultados:
+            return jsonify({'success': True, 'resultado': "🔍 Resultados:\n" + "\n".join(resultados)})
+        return jsonify({'success': True, 'resultado': "Nenhum resultado encontrado."})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# ==========================================
+# ========== SETUP ========================
+# ==========================================
+
 @app.route('/setup_noticias', methods=['GET'])
 def setup_noticias():
     try:
@@ -501,7 +570,7 @@ def setup_noticias():
         """)
         conn.commit()
         conn.close()
-        return jsonify({'success': True, 'message': 'Tabela noticias pronta!'})
+        return jsonify({'success': True, 'message': 'Tabela noticias criada/verificada!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -510,22 +579,25 @@ if __name__ == '__main__':
     print("=" * 50)
     print("🚀 API Unidos do Alvorada rodando!")
     print("📍 Endpoints disponíveis:")
-    print("   - POST /login")
     print("   - GET  /exec?acao=buscarTodosRitmistas")
+    print("   - POST /login")
     print("   - POST /atualizar_status")
     print("   - POST /editar_ritmista")
-    print("   - DELETE /excluir_ritmista")
     print("   - POST /inscricao")
     print("   - GET  /ranking_presenca")
-    print("   - GET  /presenca_periodo")
-    print("   - POST /salvar_chamada")
+    print("   - GET  /presenca_periodo?inicio=YYYY-MM-DD&fim=YYYY-MM-DD")
     print("   - GET  /listar_chamadas")
-    print("   - GET  /chamada")
+    print("   - GET  /chamada?data=YYYY-MM-DD")
+    print("   - POST /salvar_chamada")
+    print("   --- NOTÍCIAS ---")
     print("   - GET  /noticias")
+    print("   - GET  /noticias/<id>")
     print("   - POST /noticias/admin/listar")
-    print("   - POST /noticias/criar")
+    print("   - POST /noticias/criar (sem autenticação - teste)")
     print("   - POST /noticias/editar/<id>")
     print("   - DELETE /noticias/excluir/<id>")
+    print("   --- BUSCA NA WEB ---")
+    print("   - POST /buscar (DuckDuckGo)")
     print("   - GET  /setup_noticias")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)
