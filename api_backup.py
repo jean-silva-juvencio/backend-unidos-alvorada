@@ -682,6 +682,45 @@ def excluir_comentario():
         return jsonify({'success': False, 'error': str(e)})
 
 # ==========================================
+# ========== APAGAR CHAMADAS ==============
+# ==========================================
+
+@app.route('/apagar_chamadas', methods=['DELETE'])
+def apagar_chamadas():
+    try:
+        dados = request.json
+        tipo = dados.get('tipo')
+        
+        if not tipo:
+            return jsonify({'success': False, 'error': 'Tipo é obrigatório'})
+        
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        
+        if tipo == 'mes':
+            agora = datetime.now()
+            mes_atual = agora.strftime('%Y-%m')
+            cursor.execute("DELETE FROM chamadas WHERE data LIKE %s", (f'{mes_atual}%',))
+            meses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 
+                     'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+            mes_nome = meses[agora.month - 1]
+            mensagem = f'Chamadas do mês de {mes_nome}/{agora.year} apagadas com sucesso!'
+        elif tipo == 'ano':
+            ano_atual = datetime.now().year
+            cursor.execute("DELETE FROM chamadas WHERE YEAR(data) = %s", (ano_atual,))
+            mensagem = f'Chamadas do ano {ano_atual} apagadas com sucesso!'
+        else:
+            cursor.execute("DELETE FROM chamadas")
+            mensagem = 'Todas as chamadas foram apagadas com sucesso!'
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': mensagem})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# ==========================================
 # ========== SETUP =======================
 # ==========================================
 
@@ -811,7 +850,8 @@ if __name__ == '__main__':
     print("   - POST /editar_ritmista")
     print("   - DELETE /excluir_ritmista")
     print("   - POST /inscricao")
-    print("   - DELETE /excluir_comentario")  # NOVO ENDPOINT
+    print("   - DELETE /excluir_comentario")
+    print("   - DELETE /apagar_chamadas")  # NOVO ENDPOINT
     print("   - GET  /ranking_presenca")
     print("   - GET  /presenca_periodo")
     print("   - GET  /listar_chamadas")
