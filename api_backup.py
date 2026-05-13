@@ -98,7 +98,8 @@ def exec_google_sheets():
             cursor.execute("""
                 SELECT id, nome, instrumento, nivel, telefone, email, cep, endereco, 
                        numero, bairro, cidade, estado, blusa, status, data_nasc, data_cadastro,
-                       avaliacao_tipo, avaliacao_nota, avaliacao_comentario
+                       avaliacao_tipo, avaliacao_nota, avaliacao_comentario,
+                       como_conheceu, como_conheceu_outro
                 FROM ritmistas
             """)
             resultados = cursor.fetchall()
@@ -115,7 +116,9 @@ def exec_google_sheets():
                     'dataCadastro': r[15].strftime("%d/%m/%Y, %H:%M:%S") if r[15] else '',
                     'avaliacao_tipo': r[16] if len(r) > 16 else None,
                     'avaliacao_nota': r[17] if len(r) > 17 else None,
-                    'avaliacao_comentario': r[18] if len(r) > 18 else None
+                    'avaliacao_comentario': r[18] if len(r) > 18 else None,
+                    'como_conheceu': r[19] if len(r) > 19 else None,
+                    'como_conheceu_outro': r[20] if len(r) > 20 else None
                 })
             
             return jsonify({'success': True, 'ritmistas': ritmistas})
@@ -197,7 +200,7 @@ def excluir_ritmista():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-# ========== INSCRIÇÃO DE NOVO RITMISTA (COM AVALIAÇÃO) ==========
+# ========== INSCRIÇÃO DE NOVO RITMISTA ==========
 @app.route('/inscricao', methods=['POST'])
 def inscricao():
     try:
@@ -205,29 +208,30 @@ def inscricao():
         conn = conectar_banco()
         cursor = conn.cursor()
         
-        # Verificar se o e-mail já existe
         email = dados.get('email')
         cursor.execute("SELECT id FROM ritmistas WHERE email = %s", (email,))
         if cursor.fetchone():
             conn.close()
             return jsonify({'success': False, 'error': 'E-mail já cadastrado!'})
         
-        # Inserir com os novos campos de avaliação
         cursor.execute("""
             INSERT INTO ritmistas 
             (nome, data_nasc, telefone, email, cep, endereco, numero, bairro, 
              cidade, estado, instrumento, nivel, blusa, status, 
-             avaliacao_tipo, avaliacao_nota, avaliacao_comentario)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDENTE', %s, %s, %s)
+             avaliacao_tipo, avaliacao_nota, avaliacao_comentario,
+             como_conheceu, como_conheceu_outro)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDENTE', %s, %s, %s, %s, %s)
         """, (
             dados.get('nome'), dados.get('dataNasc'), dados.get('telefone'),
             dados.get('email'), dados.get('cep'), dados.get('endereco'),
             dados.get('numero'), dados.get('bairro'), dados.get('cidade'),
             dados.get('estado'), dados.get('instrumento'), dados.get('nivel'),
             dados.get('blusa'),
-            dados.get('avaliacao_tipo'),      # NOVO: tipo (elogio/sugestao/critica)
-            dados.get('avaliacao_nota'),       # NOVO: nota (1 a 5)
-            dados.get('avaliacao_comentario')  # NOVO: comentário
+            dados.get('avaliacao_tipo'),
+            dados.get('avaliacao_nota'),
+            dados.get('avaliacao_comentario'),
+            dados.get('como_conheceu'),
+            dados.get('como_conheceu_outro')
         ))
         conn.commit()
         conn.close()
@@ -596,16 +600,13 @@ def excluir_banner(id):
         return jsonify({'success': False, 'error': str(e)})
 
 # ==========================================
-# ========== BUSCA NA WEB (DuckDuckGo) =====
+# ========== BUSCA NA WEB ==================
 # ==========================================
 
 def buscar_duckduckgo(query):
-    """Busca informações no DuckDuckGo (grátis, sem chave)"""
     try:
         url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         
@@ -623,10 +624,7 @@ def buscar_duckduckgo(query):
                 })
         
         if resultados:
-            texto = "\n\n".join([
-                f"🔍 {r['titulo']}\n📄 {r['resumo'][:300]}\n🔗 {r['link']}"
-                for r in resultados
-            ])
+            texto = "\n\n".join([f"🔍 {r['titulo']}\n📄 {r['resumo'][:300]}\n🔗 {r['link']}" for r in resultados])
             return texto
         return "Nenhum resultado encontrado para esta busca."
     except Exception as e:
@@ -635,26 +633,56 @@ def buscar_duckduckgo(query):
 
 @app.route('/buscar', methods=['POST'])
 def buscar_web():
-    """Endpoint para busca na web usando DuckDuckGo"""
     try:
         dados = request.json
         query = dados.get('query', '')
-        
         if not query or not query.strip():
             return jsonify({'success': False, 'error': 'Digite o que você quer buscar'})
-        
         resultado = buscar_duckduckgo(query)
-        return jsonify({
-            'success': True, 
-            'query': query,
-            'resultado': resultado,
-            'fonte': 'DuckDuckGo'
-        })
+        return jsonify({'success': True, 'query': query, 'resultado': resultado, 'fonte': 'DuckDuckGo'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 # ==========================================
-# ========== SETUP: CRIAR TABELAS ==========
+# ========== EXCLUIR COMENTÁRIO ==========
+# ==========================================
+
+@app.route('/excluir_comentario', methods=['DELETE'])
+def excluir_comentario():
+    try:
+        dados = request.json
+        id_ritmista = dados.get('id')
+        
+        if not id_ritmista:
+            return jsonify({'success': False, 'error': 'ID é obrigatório'})
+        
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id, nome FROM ritmistas WHERE id = %s", (id_ritmista,))
+        ritmista = cursor.fetchone()
+        
+        if not ritmista:
+            conn.close()
+            return jsonify({'success': False, 'error': 'Ritmista não encontrado'})
+        
+        cursor.execute("""
+            UPDATE ritmistas 
+            SET avaliacao_tipo = NULL, 
+                avaliacao_nota = NULL, 
+                avaliacao_comentario = NULL
+            WHERE id = %s
+        """, (id_ritmista,))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': f'Comentário de {ritmista[1]} excluído com sucesso!'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# ==========================================
+# ========== SETUP =======================
 # ==========================================
 
 @app.route('/setup_noticias', methods=['GET'])
@@ -705,19 +733,25 @@ def setup_avaliacao():
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
-        
-        # Adicionar colunas de avaliação na tabela ritmistas se não existirem
-        cursor.execute("""
-            ALTER TABLE ritmistas 
-            ADD COLUMN IF NOT EXISTS avaliacao_tipo VARCHAR(20) DEFAULT NULL,
-            ADD COLUMN IF NOT EXISTS avaliacao_nota INT DEFAULT NULL,
-            ADD COLUMN IF NOT EXISTS avaliacao_comentario TEXT DEFAULT NULL
-        """)
-        
+        cursor.execute("ALTER TABLE ritmistas ADD COLUMN IF NOT EXISTS avaliacao_tipo VARCHAR(20) DEFAULT NULL")
+        cursor.execute("ALTER TABLE ritmistas ADD COLUMN IF NOT EXISTS avaliacao_nota INT DEFAULT NULL")
+        cursor.execute("ALTER TABLE ritmistas ADD COLUMN IF NOT EXISTS avaliacao_comentario TEXT DEFAULT NULL")
         conn.commit()
         conn.close()
-        
         return jsonify({'success': True, 'message': 'Colunas de avaliação adicionadas com sucesso!'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/setup_como_conheceu', methods=['GET'])
+def setup_como_conheceu():
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute("ALTER TABLE ritmistas ADD COLUMN IF NOT EXISTS como_conheceu VARCHAR(50) DEFAULT NULL")
+        cursor.execute("ALTER TABLE ritmistas ADD COLUMN IF NOT EXISTS como_conheceu_outro VARCHAR(255) DEFAULT NULL")
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'message': 'Colunas como_conheceu adicionadas com sucesso!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -727,7 +761,6 @@ def setup_all():
         conn = conectar_banco()
         cursor = conn.cursor()
         
-        # Criar tabela noticias
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS noticias (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -742,7 +775,6 @@ def setup_all():
             )
         """)
         
-        # Criar tabela banners
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS banners (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -752,17 +784,12 @@ def setup_all():
             )
         """)
         
-        # Adicionar colunas de avaliação
         try:
-            cursor.execute("ALTER TABLE ritmistas ADD COLUMN avaliacao_tipo VARCHAR(20) DEFAULT NULL")
-        except:
-            pass
-        try:
-            cursor.execute("ALTER TABLE ritmistas ADD COLUMN avaliacao_nota INT DEFAULT NULL")
-        except:
-            pass
-        try:
-            cursor.execute("ALTER TABLE ritmistas ADD COLUMN avaliacao_comentario TEXT DEFAULT NULL")
+            cursor.execute("ALTER TABLE ritmistas ADD COLUMN IF NOT EXISTS avaliacao_tipo VARCHAR(20) DEFAULT NULL")
+            cursor.execute("ALTER TABLE ritmistas ADD COLUMN IF NOT EXISTS avaliacao_nota INT DEFAULT NULL")
+            cursor.execute("ALTER TABLE ritmistas ADD COLUMN IF NOT EXISTS avaliacao_comentario TEXT DEFAULT NULL")
+            cursor.execute("ALTER TABLE ritmistas ADD COLUMN IF NOT EXISTS como_conheceu VARCHAR(50) DEFAULT NULL")
+            cursor.execute("ALTER TABLE ritmistas ADD COLUMN IF NOT EXISTS como_conheceu_outro VARCHAR(255) DEFAULT NULL")
         except:
             pass
         
@@ -783,7 +810,8 @@ if __name__ == '__main__':
     print("   - POST /atualizar_status")
     print("   - POST /editar_ritmista")
     print("   - DELETE /excluir_ritmista")
-    print("   - POST /inscricao (COM AVALIAÇÃO)")
+    print("   - POST /inscricao")
+    print("   - DELETE /excluir_comentario")  # NOVO ENDPOINT
     print("   - GET  /ranking_presenca")
     print("   - GET  /presenca_periodo")
     print("   - GET  /listar_chamadas")
@@ -801,11 +829,12 @@ if __name__ == '__main__':
     print("   - POST /banners/criar")
     print("   - DELETE /banners/excluir/<id>")
     print("   --- BUSCA NA WEB ---")
-    print("   - POST /buscar (DuckDuckGo)")
+    print("   - POST /buscar")
     print("   --- SETUP ---")
     print("   - GET  /setup_noticias")
     print("   - GET  /setup_banners")
     print("   - GET  /setup_avaliacao")
+    print("   - GET  /setup_como_conheceu")
     print("   - GET  /setup_all")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)
