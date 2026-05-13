@@ -6,10 +6,6 @@ import bcrypt
 import secrets
 import requests
 from bs4 import BeautifulSoup
-import base64
-import uuid
-import os
-import json
 
 app = Flask(__name__)
 CORS(app)
@@ -99,7 +95,12 @@ def exec_google_sheets():
         try:
             conn = conectar_banco()
             cursor = conn.cursor()
-            cursor.execute("SELECT id, nome, instrumento, nivel, telefone, email, cep, endereco, numero, bairro, cidade, estado, blusa, status, data_nasc, data_cadastro FROM ritmistas")
+            cursor.execute("""
+                SELECT id, nome, instrumento, nivel, telefone, email, cep, endereco, 
+                       numero, bairro, cidade, estado, blusa, status, data_nasc, data_cadastro,
+                       avaliacao_tipo, avaliacao_nota, avaliacao_comentario
+                FROM ritmistas
+            """)
             resultados = cursor.fetchall()
             conn.close()
             
@@ -111,7 +112,10 @@ def exec_google_sheets():
                     'numero': r[8], 'bairro': r[9], 'cidade': r[10], 'estado': r[11],
                     'blusa': r[12], 'status': r[13],
                     'dataNasc': r[14].strftime("%Y-%m-%d") if r[14] else '',
-                    'dataCadastro': r[15].strftime("%d/%m/%Y, %H:%M:%S") if r[15] else ''
+                    'dataCadastro': r[15].strftime("%d/%m/%Y, %H:%M:%S") if r[15] else '',
+                    'avaliacao_tipo': r[16] if len(r) > 16 else None,
+                    'avaliacao_nota': r[17] if len(r) > 17 else None,
+                    'avaliacao_comentario': r[18] if len(r) > 18 else None
                 })
             
             return jsonify({'success': True, 'ritmistas': ritmistas})
@@ -193,26 +197,41 @@ def excluir_ritmista():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-# ========== INSCRIÇÃO DE NOVO RITMISTA ==========
+# ========== INSCRIÇÃO DE NOVO RITMISTA (COM AVALIAÇÃO) ==========
 @app.route('/inscricao', methods=['POST'])
 def inscricao():
     try:
         dados = request.json
         conn = conectar_banco()
         cursor = conn.cursor()
+        
+        # Verificar se o e-mail já existe
+        email = dados.get('email')
+        cursor.execute("SELECT id FROM ritmistas WHERE email = %s", (email,))
+        if cursor.fetchone():
+            conn.close()
+            return jsonify({'success': False, 'error': 'E-mail já cadastrado!'})
+        
+        # Inserir com os novos campos de avaliação
         cursor.execute("""
             INSERT INTO ritmistas 
-            (nome, data_nasc, telefone, email, cep, endereco, numero, bairro, cidade, estado, instrumento, nivel, blusa, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDENTE')
+            (nome, data_nasc, telefone, email, cep, endereco, numero, bairro, 
+             cidade, estado, instrumento, nivel, blusa, status, 
+             avaliacao_tipo, avaliacao_nota, avaliacao_comentario)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDENTE', %s, %s, %s)
         """, (
             dados.get('nome'), dados.get('dataNasc'), dados.get('telefone'),
             dados.get('email'), dados.get('cep'), dados.get('endereco'),
             dados.get('numero'), dados.get('bairro'), dados.get('cidade'),
             dados.get('estado'), dados.get('instrumento'), dados.get('nivel'),
-            dados.get('blusa')
+            dados.get('blusa'),
+            dados.get('avaliacao_tipo'),      # NOVO: tipo (elogio/sugestao/critica)
+            dados.get('avaliacao_nota'),       # NOVO: nota (1 a 5)
+            dados.get('avaliacao_comentario')  # NOVO: comentário
         ))
         conn.commit()
         conn.close()
+        
         return jsonify({'success': True, 'message': 'Inscrição enviada com sucesso!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -296,9 +315,9 @@ def listar_chamadas():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-# ========== DETALHE DA CHAMADA ==========
+# ========== DETALHES DE UMA CHAMADA ==========
 @app.route('/chamada', methods=['GET'])
-def get_chamada():
+def detalhes_chamada():
     try:
         data = request.args.get('data')
         if not data:
@@ -315,13 +334,8 @@ def get_chamada():
         resultados = cursor.fetchall()
         conn.close()
         
-        presentes = []
-        ausentes = []
-        for nome, status in resultados:
-            if status == 'PRESENTE':
-                presentes.append(nome)
-            else:
-                ausentes.append(nome)
+        presentes = [r[0] for r in resultados if r[1] == 'PRESENTE']
+        ausentes = [r[0] for r in resultados if r[1] == 'AUSENTE']
         
         return jsonify({'success': True, 'presentes': presentes, 'ausentes': ausentes})
     except Exception as e:
@@ -336,12 +350,14 @@ def salvar_chamada():
         presencas = dados.get('presencas')
         if not data or not presencas:
             return jsonify({'success': False, 'error': 'Data e presenças são obrigatórios'})
+        
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM chamadas WHERE data = %s LIMIT 1", (data,))
         if cursor.fetchone():
             conn.close()
             return jsonify({'success': False, 'error': 'Chamada já registrada para esta data'})
+        
         for ritmista_id, status in presencas.items():
             cursor.execute("INSERT INTO chamadas (data, ritmista_id, status) VALUES (%s, %s, %s)", (data, ritmista_id, status))
         conn.commit()
@@ -360,22 +376,23 @@ def listar_noticias():
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, titulo, resumo, conteudo, imagem_base64, autor, data_publicacao, destaque
+            SELECT id, titulo, resumo, conteudo, imagem_url, autor, data_publicacao, destaque
             FROM noticias
             WHERE status = 'PUBLICADA'
             ORDER BY destaque DESC, data_publicacao DESC
         """)
         resultados = cursor.fetchall()
         conn.close()
-        
+
         noticias = []
         for n in resultados:
             noticias.append({
                 'id': n[0], 'titulo': n[1], 'resumo': n[2], 'conteudo': n[3],
-                'imagem_base64': n[4], 'autor': n[5],
+                'imagem_url': n[4], 'autor': n[5],
                 'data_publicacao': n[6].strftime("%d/%m/%Y às %H:%M") if n[6] else '',
                 'destaque': bool(n[7])
             })
+
         return jsonify({'success': True, 'noticias': noticias})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -386,16 +403,18 @@ def buscar_noticia(id):
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, titulo, resumo, conteudo, imagem_base64, autor, data_publicacao, destaque
+            SELECT id, titulo, resumo, conteudo, imagem_url, autor, data_publicacao, destaque
             FROM noticias WHERE id = %s AND status = 'PUBLICADA'
         """, (id,))
         n = cursor.fetchone()
         conn.close()
+
         if not n:
             return jsonify({'success': False, 'error': 'Notícia não encontrada'})
+
         return jsonify({'success': True, 'noticia': {
             'id': n[0], 'titulo': n[1], 'resumo': n[2], 'conteudo': n[3],
-            'imagem_base64': n[4], 'autor': n[5],
+            'imagem_url': n[4], 'autor': n[5],
             'data_publicacao': n[6].strftime("%d/%m/%Y às %H:%M") if n[6] else '',
             'destaque': bool(n[7])
         }})
@@ -410,17 +429,16 @@ def listar_noticias_admin():
         usuario = verificar_sessao(token)
         if not usuario:
             return jsonify({'success': False, 'error': 'Acesso negado'})
-        
+
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT id, titulo, resumo, autor, data_publicacao, status, destaque
-            FROM noticias
-            ORDER BY data_publicacao DESC
+            FROM noticias ORDER BY data_publicacao DESC
         """)
         resultados = cursor.fetchall()
         conn.close()
-        
+
         noticias = []
         for n in resultados:
             noticias.append({
@@ -428,6 +446,7 @@ def listar_noticias_admin():
                 'data_publicacao': n[4].strftime("%d/%m/%Y às %H:%M") if n[4] else '',
                 'status': n[5], 'destaque': bool(n[6])
             })
+
         return jsonify({'success': True, 'noticias': noticias})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -436,29 +455,24 @@ def listar_noticias_admin():
 def criar_noticia():
     try:
         dados = request.json
+        token = dados.get('token')
+        usuario = verificar_sessao(token)
+        if not usuario:
+            return jsonify({'success': False, 'error': 'Acesso negado'})
 
         titulo = dados.get('titulo', '').strip()
         conteudo = dados.get('conteudo', '').strip()
         if not titulo or not conteudo:
             return jsonify({'success': False, 'error': 'Título e conteúdo são obrigatórios'})
 
-        imagem_base64 = dados.get('imagem_base64', '')
-
         conn = conectar_banco()
         cursor = conn.cursor()
-        
-        # Verificar se a tabela noticias tem a coluna imagem_base64
-        cursor.execute("SHOW COLUMNS FROM noticias LIKE 'imagem_base64'")
-        if not cursor.fetchone():
-            cursor.execute("ALTER TABLE noticias ADD COLUMN imagem_base64 LONGTEXT")
-            conn.commit()
-        
         cursor.execute("""
-            INSERT INTO noticias (titulo, resumo, conteudo, imagem_base64, autor, status, destaque, data_publicacao)
+            INSERT INTO noticias (titulo, resumo, conteudo, imagem_url, autor, status, destaque, data_publicacao)
             VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
         """, (
-            titulo, dados.get('resumo', ''), conteudo, imagem_base64,
-            dados.get('autor', 'Admin'), dados.get('status', 'PUBLICADA'),
+            titulo, dados.get('resumo', ''), conteudo, dados.get('imagem_url', ''),
+            usuario.get('nome', 'Admin'), dados.get('status', 'PUBLICADA'),
             1 if dados.get('destaque') else 0
         ))
         conn.commit()
@@ -473,23 +487,25 @@ def criar_noticia():
 def editar_noticia(id):
     try:
         dados = request.json
+        token = dados.get('token')
+        usuario = verificar_sessao(token)
+        if not usuario:
+            return jsonify({'success': False, 'error': 'Acesso negado'})
 
         titulo = dados.get('titulo', '').strip()
         conteudo = dados.get('conteudo', '').strip()
         if not titulo or not conteudo:
             return jsonify({'success': False, 'error': 'Título e conteúdo são obrigatórios'})
 
-        imagem_base64 = dados.get('imagem_base64', '')
-
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE noticias
-            SET titulo = %s, resumo = %s, conteudo = %s, imagem_base64 = %s,
+            SET titulo = %s, resumo = %s, conteudo = %s, imagem_url = %s,
                 status = %s, destaque = %s
             WHERE id = %s
         """, (
-            titulo, dados.get('resumo', ''), conteudo, imagem_base64,
+            titulo, dados.get('resumo', ''), conteudo, dados.get('imagem_url', ''),
             dados.get('status', 'PUBLICADA'), 1 if dados.get('destaque') else 0, id
         ))
         conn.commit()
@@ -502,17 +518,24 @@ def editar_noticia(id):
 @app.route('/noticias/excluir/<int:id>', methods=['DELETE'])
 def excluir_noticia(id):
     try:
+        dados = request.json
+        token = dados.get('token')
+        usuario = verificar_sessao(token)
+        if not usuario:
+            return jsonify({'success': False, 'error': 'Acesso negado'})
+
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM noticias WHERE id = %s", (id,))
         conn.commit()
         conn.close()
+
         return jsonify({'success': True, 'message': 'Notícia excluída!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 # ==========================================
-# ========== BANNERS (CARROSSEL) ==========
+# ========== BANNERS =======================
 # ==========================================
 
 @app.route('/banners', methods=['GET'])
@@ -525,23 +548,22 @@ def listar_banners():
         conn.close()
         
         banners = []
-        for r in resultados:
+        for b in resultados:
             banners.append({
-                'id': r[0],
-                'imagem_base64': r[1],
-                'ordem': r[2]
+                'id': b[0],
+                'imagem_base64': b[1],
+                'ordem': b[2]
             })
         
         return jsonify({'success': True, 'banners': banners})
     except Exception as e:
-        # Se tabela não existir, cria e retorna vazio
-        return jsonify({'success': True, 'banners': []})
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/banners/criar', methods=['POST'])
 def criar_banner():
     try:
         dados = request.json
-        imagem_base64 = dados.get('imagem_base64', '')
+        imagem_base64 = dados.get('imagem_base64')
         ordem = dados.get('ordem', 0)
         
         if not imagem_base64:
@@ -549,27 +571,14 @@ def criar_banner():
         
         conn = conectar_banco()
         cursor = conn.cursor()
-        
-        # Criar tabela se não existir
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS banners (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                imagem_base64 LONGTEXT NOT NULL,
-                ordem INT DEFAULT 0,
-                created_at DATETIME DEFAULT NOW()
-            )
-        """)
-        conn.commit()
-        
         cursor.execute("""
             INSERT INTO banners (imagem_base64, ordem)
             VALUES (%s, %s)
         """, (imagem_base64, ordem))
         conn.commit()
-        novo_id = cursor.lastrowid
         conn.close()
         
-        return jsonify({'success': True, 'message': 'Banner criado!', 'id': novo_id})
+        return jsonify({'success': True, 'message': 'Banner adicionado!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -581,57 +590,71 @@ def excluir_banner(id):
         cursor.execute("DELETE FROM banners WHERE id = %s", (id,))
         conn.commit()
         conn.close()
-        return jsonify({'success': True, 'message': 'Banner removido!'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/banners/reordenar', methods=['POST'])
-def reordenar_banners():
-    try:
-        dados = request.json
-        ids = dados.get('ids', [])
         
-        conn = conectar_banco()
-        cursor = conn.cursor()
-        for ordem, id_banner in enumerate(ids):
-            cursor.execute("UPDATE banners SET ordem = %s WHERE id = %s", (ordem, id_banner))
-        conn.commit()
-        conn.close()
-        return jsonify({'success': True, 'message': 'Ordem atualizada!'})
+        return jsonify({'success': True, 'message': 'Banner excluído!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 # ==========================================
-# ========== BUSCA NA WEB ==================
+# ========== BUSCA NA WEB (DuckDuckGo) =====
 # ==========================================
 
-@app.route('/buscar', methods=['POST'])
-def buscar_web():
+def buscar_duckduckgo(query):
+    """Busca informações no DuckDuckGo (grátis, sem chave)"""
     try:
-        dados = request.json
-        query = dados.get('query', '')
-        if not query:
-            return jsonify({'success': False, 'error': 'Digite uma busca'})
-        
         url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
         response = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         
         resultados = []
         for result in soup.select('.result')[:5]:
             titulo = result.select_one('.result__a')
-            if titulo:
-                resultados.append(f"• {titulo.get_text(strip=True)}")
+            snippet = result.select_one('.result__snippet')
+            link = result.select_one('.result__url')
+            
+            if titulo and snippet:
+                resultados.append({
+                    'titulo': titulo.get_text(strip=True),
+                    'resumo': snippet.get_text(strip=True),
+                    'link': link.get_text(strip=True) if link else ''
+                })
         
         if resultados:
-            return jsonify({'success': True, 'resultado': "🔍 Resultados:\n" + "\n".join(resultados)})
-        return jsonify({'success': True, 'resultado': "Nenhum resultado encontrado."})
+            texto = "\n\n".join([
+                f"🔍 {r['titulo']}\n📄 {r['resumo'][:300]}\n🔗 {r['link']}"
+                for r in resultados
+            ])
+            return texto
+        return "Nenhum resultado encontrado para esta busca."
+    except Exception as e:
+        print(f"Erro na busca: {e}")
+        return "Erro ao buscar informações. Tente novamente mais tarde."
+
+@app.route('/buscar', methods=['POST'])
+def buscar_web():
+    """Endpoint para busca na web usando DuckDuckGo"""
+    try:
+        dados = request.json
+        query = dados.get('query', '')
+        
+        if not query or not query.strip():
+            return jsonify({'success': False, 'error': 'Digite o que você quer buscar'})
+        
+        resultado = buscar_duckduckgo(query)
+        return jsonify({
+            'success': True, 
+            'query': query,
+            'resultado': resultado,
+            'fonte': 'DuckDuckGo'
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 # ==========================================
-# ========== SETUP ========================
+# ========== SETUP: CRIAR TABELAS ==========
 # ==========================================
 
 @app.route('/setup_noticias', methods=['GET'])
@@ -645,7 +668,7 @@ def setup_noticias():
                 titulo VARCHAR(255) NOT NULL,
                 resumo TEXT,
                 conteudo LONGTEXT NOT NULL,
-                imagem_base64 LONGTEXT,
+                imagem_url VARCHAR(500),
                 autor VARCHAR(100),
                 status ENUM('PUBLICADA', 'RASCUNHO') DEFAULT 'PUBLICADA',
                 destaque TINYINT(1) DEFAULT 0,
@@ -654,11 +677,103 @@ def setup_noticias():
         """)
         conn.commit()
         conn.close()
-        return jsonify({'success': True, 'message': 'Tabela noticias criada/verificada!'})
+        return jsonify({'success': True, 'message': 'Tabela noticias criada/verificada com sucesso!'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-# ========== INÍCIO ==========
+@app.route('/setup_banners', methods=['GET'])
+def setup_banners():
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS banners (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                imagem_base64 LONGTEXT NOT NULL,
+                ordem INT DEFAULT 0,
+                data_criacao DATETIME DEFAULT NOW()
+            )
+        """)
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'message': 'Tabela banners criada/verificada com sucesso!'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/setup_avaliacao', methods=['GET'])
+def setup_avaliacao():
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        
+        # Adicionar colunas de avaliação na tabela ritmistas se não existirem
+        cursor.execute("""
+            ALTER TABLE ritmistas 
+            ADD COLUMN IF NOT EXISTS avaliacao_tipo VARCHAR(20) DEFAULT NULL,
+            ADD COLUMN IF NOT EXISTS avaliacao_nota INT DEFAULT NULL,
+            ADD COLUMN IF NOT EXISTS avaliacao_comentario TEXT DEFAULT NULL
+        """)
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': 'Colunas de avaliação adicionadas com sucesso!'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/setup_all', methods=['GET'])
+def setup_all():
+    try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        
+        # Criar tabela noticias
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS noticias (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                titulo VARCHAR(255) NOT NULL,
+                resumo TEXT,
+                conteudo LONGTEXT NOT NULL,
+                imagem_url VARCHAR(500),
+                autor VARCHAR(100),
+                status ENUM('PUBLICADA', 'RASCUNHO') DEFAULT 'PUBLICADA',
+                destaque TINYINT(1) DEFAULT 0,
+                data_publicacao DATETIME DEFAULT NOW()
+            )
+        """)
+        
+        # Criar tabela banners
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS banners (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                imagem_base64 LONGTEXT NOT NULL,
+                ordem INT DEFAULT 0,
+                data_criacao DATETIME DEFAULT NOW()
+            )
+        """)
+        
+        # Adicionar colunas de avaliação
+        try:
+            cursor.execute("ALTER TABLE ritmistas ADD COLUMN avaliacao_tipo VARCHAR(20) DEFAULT NULL")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE ritmistas ADD COLUMN avaliacao_nota INT DEFAULT NULL")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE ritmistas ADD COLUMN avaliacao_comentario TEXT DEFAULT NULL")
+        except:
+            pass
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': 'Todas as tabelas e colunas foram configuradas!'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# ========== INÍCIO DA API ==========
 if __name__ == '__main__':
     print("=" * 50)
     print("🚀 API Unidos do Alvorada rodando!")
@@ -667,26 +782,30 @@ if __name__ == '__main__':
     print("   - POST /login")
     print("   - POST /atualizar_status")
     print("   - POST /editar_ritmista")
-    print("   - POST /inscricao")
+    print("   - DELETE /excluir_ritmista")
+    print("   - POST /inscricao (COM AVALIAÇÃO)")
     print("   - GET  /ranking_presenca")
-    print("   - GET  /presenca_periodo?inicio=YYYY-MM-DD&fim=YYYY-MM-DD")
+    print("   - GET  /presenca_periodo")
     print("   - GET  /listar_chamadas")
-    print("   - GET  /chamada?data=YYYY-MM-DD")
+    print("   - GET  /chamada?data=...")
     print("   - POST /salvar_chamada")
-    print("   --- NOTÍCIAS (com imagem Base64) ---")
+    print("   --- NOTÍCIAS ---")
     print("   - GET  /noticias")
     print("   - GET  /noticias/<id>")
     print("   - POST /noticias/admin/listar")
     print("   - POST /noticias/criar")
     print("   - POST /noticias/editar/<id>")
     print("   - DELETE /noticias/excluir/<id>")
-    print("   --- BANNERS (carrossel) ---")
+    print("   --- BANNERS ---")
     print("   - GET  /banners")
     print("   - POST /banners/criar")
     print("   - DELETE /banners/excluir/<id>")
-    print("   - POST /banners/reordenar")
     print("   --- BUSCA NA WEB ---")
     print("   - POST /buscar (DuckDuckGo)")
+    print("   --- SETUP ---")
     print("   - GET  /setup_noticias")
+    print("   - GET  /setup_banners")
+    print("   - GET  /setup_avaliacao")
+    print("   - GET  /setup_all")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)
